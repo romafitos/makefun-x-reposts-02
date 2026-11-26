@@ -1,41 +1,43 @@
-// makefun-x-reposts-02 entry program (Node 22, standard library only, no network).
-// Reads POSTS.json from the repository and writes a deterministic manifest of the
-// entered X posts to the output folder. The posts themselves are the entry.
+// makefun-x-reposts-02 entry (Node 22, standard library only, no network).
+// The entry is the quote posts themselves, all from @sofianeouafir, each quoting a different
+// @makefunai pool post. This program hands them in: it checks POSTS.json in the bot folder and
+// writes it to the output folder as POSTS.json, the file the house gate reads.
+//
+// r1 wrote ./output/manifest.json instead, so the gate found no POSTS.json (valid 0). Fixed here.
+//
+// In the grader container the folders are /bot and /output. Locally:
+//   mkdir -p out && MAKEFUN_BOT_DIR=. MAKEFUN_OUTPUT_DIR=out node main.ts
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const botDir = process.env.MAKEFUN_BOT_DIR || ".";
-const outDir = process.env.MAKEFUN_OUTPUT_DIR || "./output";
+const BOT_DIR = process.env.MAKEFUN_BOT_DIR ?? "/bot";
+const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+const STATUS = /^https:\/\/(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/status\/(\d{5,25})$/;
 
-type Post = { url: string; handle: string; id: string };
-
-function parsePost(raw: unknown): Post | null {
-  if (typeof raw !== "string") return null;
-  const m = raw.trim().match(/^https:\/\/(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/status\/(\d{5,25})$/);
-  if (!m) return null;
-  return { url: raw.trim(), handle: m[1], id: m[2] };
+function fail(msg: string): never {
+  console.error(`POSTS.json: ${msg}`);
+  process.exit(1);
 }
 
-const doc = JSON.parse(readFileSync(join(botDir, "POSTS.json"), "utf8"));
-const list: unknown[] = Array.isArray(doc?.posts) ? doc.posts : [];
-const seen = new Set<string>();
-const posts: Post[] = [];
-const problems: string[] = [];
-for (const raw of list) {
-  const p = parsePost(raw);
-  if (!p) { problems.push(`not an X status address: ${String(raw)}`); continue; }
-  if (seen.has(p.id)) { problems.push(`duplicate post ${p.id}`); continue; }
-  seen.add(p.id);
-  posts.push(p);
+let doc: { posts?: unknown };
+try {
+  doc = JSON.parse(readFileSync(join(BOT_DIR, "POSTS.json"), "utf8"));
+} catch (err) {
+  fail(`could not be read from ${BOT_DIR}: ${(err as Error).message}`);
 }
-if (posts.length > 15) problems.push(`too many posts: ${posts.length} (max 15)`);
-const handles = [...new Set(posts.map((p) => p.handle.toLowerCase()))];
-if (handles.length > 1) problems.push(`posts come from ${handles.length} accounts, rules allow one`);
+if (!Array.isArray(doc.posts) || doc.posts.length === 0) fail("posts must be a non-empty list");
 
-// Sort by status id (numeric order via length then lexical) so output never depends on file order.
-posts.sort((a, b) => a.id.length - b.id.length || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+const posts: string[] = [];
+for (const raw of doc.posts) {
+  const url = typeof raw === "string" ? raw.trim() : "";
+  if (!STATUS.test(url)) fail(`not an X status address: ${String(raw)}`);
+  posts.push(url);
+}
+if (posts.length > 15) fail(`at most 15 posts, got ${posts.length}`);
+if (new Set(posts).size !== posts.length) fail("a post is named twice");
+const accounts = new Set(posts.map((u) => (u.match(STATUS) as RegExpMatchArray)[1].toLowerCase()));
+if (accounts.size !== 1) fail(`posts come from ${accounts.size} accounts, one is allowed`);
 
-mkdirSync(outDir, { recursive: true });
-const manifest = { bounty: "makefun-x-reposts-02", account: handles[0] ?? null, count: posts.length, posts, problems };
-writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
-console.log(`posts: ${posts.length}, problems: ${problems.length}`);
+mkdirSync(OUTPUT_DIR, { recursive: true });
+writeFileSync(join(OUTPUT_DIR, "POSTS.json"), JSON.stringify({ posts }) + "\n");
+console.log(`handed in ${posts.length} posts`);
